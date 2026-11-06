@@ -1,4 +1,4 @@
-"""Web transport for the unmodified exercise engine. One engine per connection."""
+"""Web transport and reference comparison. One exercise engine per connection."""
 import asyncio
 import base64
 from concurrent.futures import ThreadPoolExecutor
@@ -25,7 +25,15 @@ app.mount('/static', StaticFiles(directory=ROOT / 'web'), name='static')
 def create_engine(exercise):
     # Lazy import lets the web server start even before model dependencies are installed.
     from pose_exercise_analyzer import ExerciseEngine
-    return ExerciseEngine(exercise)
+    engine = ExerciseEngine(exercise)
+    if exercise == "pushup":
+        from reference_comparison import ReferenceEngine, load_profile
+        try:
+            return ReferenceEngine(engine, load_profile())
+        except Exception:
+            engine.estimator.pose.close()
+            raise
+    return engine
 
 
 def analyze(engine, frame):
@@ -40,6 +48,7 @@ def analyze(engine, frame):
     if not ok:
         raise ValueError('Unable to encode analysis frame')
     return {'type': 'result', 'analysis': asdict(result),
+            'reference': getattr(engine, 'comparison', None),
             'image': base64.b64encode(jpeg).decode('ascii')}
 
 
