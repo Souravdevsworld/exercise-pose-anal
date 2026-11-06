@@ -77,3 +77,18 @@ def test_initial_partial_rep_is_not_compared():
     collector = CycleCollector()
     results = list(cycle())
     assert all(collector.update(result) is None for result in results[3:])
+
+
+def test_phase_differences_and_actual_angles_are_exposed():
+    profile = build_profile(list(cycle(count=1))+list(cycle(count=2)), {'filename':'demo.mp4'})
+    class Engine:
+        estimator = None
+        def __init__(self): self.results = iter(cycle())
+        def process_frame(self, frame): return frame, next(self.results)
+    engine = ReferenceEngine(Engine(),profile)
+    for _ in range(9): engine.process_frame(None)
+    c = engine.comparison
+    assert c['bottom_angle'] == 65
+    assert c['top_angle'] == 170
+    assert c['lowering_difference'] == c['rising_difference'] == 0
+    assert c['reference']['source'] == 'demo.mp4'

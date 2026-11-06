@@ -62,3 +62,47 @@ def test_signed_differences_do_not_cancel_issue_counts():
     report = r.build()
     assert report['statistics']['mean_bottom_difference_deg'] == 0
     assert len(report['observations']) == 2
+
+
+def test_detailed_rows_actual_endpoints_and_reference():
+    r = SessionReport('pushup','upload')
+    c = compared(bottom=5, top=-2)
+    c.update(bottom_angle=55,top_angle=168,lowering_difference=3,rising_difference=4,
+             reference={'bottom_angle':50,'top_angle':170,'source':'reference.mp4','cycles':5})
+    r.update(result(), c)
+    r.update(result(), c)
+    report = r.build('stopped')
+    assert report['version'] == 2
+    assert len(report['repetitions']) == 1
+    row = report['repetitions'][0]
+    assert row['bottom_angle_deg'] == 55
+    assert row['lowering_difference_deg'] == 3
+    assert row['end_frame'] == 1
+    assert report['reference']['top_angle'] == 170
+    assert any('55.0° / 168.0°' in text for text in report['insights'])
+    assert any('processed portion' in text for text in report['insights'])
+    assert report['next_set_focus']
+
+
+def test_consistency_and_review_rep_use_all_reps():
+    r = SessionReport('pushup','upload')
+    c = compared(1,bottom=1,top=2)
+    c['mean_angle_difference'] = 2
+    r.update(result(1),c)
+    c = compared(2,bottom=9,top=4)
+    c['mean_angle_difference'] = 8
+    r.update(result(2),c)
+    report = r.build()
+    assert any('Bottom-angle spread across compared reps: 8°' in text for text in report['insights'])
+    assert any('counted rep 1 (2°' in text and 'counted rep 2 (8°' in text for text in report['insights'])
+    assert any('All compared repetitions' in text for text in report['insights'])
+
+
+def test_row_limit_does_not_limit_aggregate_statistics():
+    r = SessionReport('pushup','live')
+    for i in range(1,503):
+        r.update(result(i),compared(i,bottom=0,top=0))
+    report = r.build()
+    assert len(report['repetitions']) == 500
+    assert report['rep_rows_truncated']
+    assert report['statistics']['compared_reps'] == 502

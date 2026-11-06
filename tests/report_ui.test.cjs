@@ -53,3 +53,16 @@ test('report rendering and text export include evidence and recommendations',()=
   vm.runInContext('resetReport()',context);
   assert.equal(nodes.get('reportPanel').hidden,true);
 });
+test('detailed report exports phase differences and renders rep rows',()=>{
+  const {document,nodes}=ui();
+  const context=vm.createContext({document,window:{print(){}},URL:{},Blob,setTimeout});
+  vm.runInContext(fs.readFileSync(path.join(root,'web/report.js'),'utf8'),context);
+  context.report={exercise:'pushup',mode:'upload',outcome:'completed',created_at:'2026-11-06T12:00:00Z',summary:'Summary',statistics:{counted_reps:1,compared_reps:1,tracked_frames:30,frames:30,tracking_percent:100,mean_elbow_difference_deg:2.7},observations:[],limitations:[],insights:['All compared reps stayed within checked thresholds.'],next_set_focus:['Maintain your comfortable range.'],reference:{source:'demo.mp4',bottom_angle:50,top_angle:170,cycles:5},repetitions:[{rep:1,end_frame:30,mean_difference_deg:2.7,lowering_difference_deg:2,rising_difference_deg:3,bottom_angle_deg:52,top_angle_deg:169,bottom_difference_deg:2,top_difference_deg:-1,range_note:'Within endpoint thresholds'}]};
+  vm.runInContext('showReport(report)',context);
+  assert.equal(nodes.get('reportRepTable').children[0].children[2].children.length,1);
+  assert.equal(nodes.get('reportFocus').children[0].textContent,'Maintain your comfortable range.');
+  assert.match(nodes.get('reportReference').textContent,/demo.mp4/);
+  const text=vm.runInContext('reportText(report)',context);
+  assert.match(text,/Lowering 2°/);
+  assert.match(text,/Bottom 52° \(\+2°\)/);
+});

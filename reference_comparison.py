@@ -132,7 +132,15 @@ class ReferenceEngine:
             self.comparison = {'status': 'compared', 'compared_reps': self.compared,
                                'mean_angle_difference': round(error, 1),
                                'bottom_difference': round(bottom_delta, 1),
-                               'top_difference': round(top_delta, 1), 'message': cue}
+                               'top_difference': round(top_delta, 1), 'message': cue,
+                               'bottom_angle': round(cycle['bottom'], 1),
+                               'top_angle': round(cycle['top'], 1),
+                               'lowering_difference': round(sum(abs(a-b) for a,b in zip(cycle['curve'][:32], self.profile['curve'][:32]))/32, 1),
+                               'rising_difference': round(sum(abs(a-b) for a,b in zip(cycle['curve'][31:], self.profile['curve'][31:]))/32, 1),
+                               'reference': {'bottom_angle': round(self.profile['bottom'],1),
+                                             'top_angle': round(self.profile['top'],1),
+                                             'source': self.profile.get('source',{}).get('filename','Reference video'),
+                                             'cycles': self.profile.get('complete_cycles')}}
         elif self.comparison['status'] == 'tracking_lost':
             self.comparison = {'status': 'waiting', 'message': 'Complete a new full repetition from the top.'}
         return annotated, result

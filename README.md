@@ -95,3 +95,11 @@ Choose **Download report** for a text report, **Export JSON** for structured dat
 This uses deterministic rules over the existing engine and reference measurements, not an external AI service. Reference thresholds remain the documented 10° heuristics. A difference from one reference is not automatically incorrect technique. The report cannot evaluate hand placement, shoulder mechanics, or overall form, and does not infer injury risk, diagnose conditions, or prescribe medical rehabilitation. Frame-based alignment observations are not rep-level error percentages or durations.
 
 Validation for reports: **29 Python tests and two JavaScript UI tests pass**, plus Python/JavaScript syntax and diff checks. UI tests simulate browser controls; physical webcam and print-dialog behavior still require browser/device testing. The original pose analyzer remains unchanged.
+
+### Detailed reports (version 2)
+
+New sessions include a per-repetition table showing counted rep number, processed end-frame index, mean aligned elbow difference, separate lowering/rising differences, actual bottom/top angles with signed reference differences, and endpoint flags. A no-flag session now explains what matched and offers maintenance-focused next-set suggestions rather than inventing corrections.
+
+Reports also show reference endpoints/source, closest and most different elbow-motion matches, bottom/top angle spread across compared reps, tracking interruptions, and whether processing stopped early. Similarity, repeatability, and tracking coverage are explicitly distinguished from technique correctness and measurement confidence. Comparisons remain limited to elbow motion and existing analyzer feedback. Phase differences describe angle patterns, not movement speed; no tempo or fatigue claim is inferred.
+
+Rep rows are bounded to the first 500 comparisons to limit memory, while aggregate statistics include every compared repetition. Text, JSON, and print/PDF output include the new details. Version 1 reports can still be displayed; regenerate a session to populate fields that were not collected previously. No new model download or reference rebuild is required. The original analyzer remains unchanged.
