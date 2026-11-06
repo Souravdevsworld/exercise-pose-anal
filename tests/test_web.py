@@ -109,7 +109,11 @@ def test_upload_every_frame_and_delete(rig, tmp_path, monkeypatch):
             result = ws.receive_json()
             assert result['analysis']['reps'] == n
             ws.send_text('ack')
-        assert ws.receive_json() == {'type': 'complete', 'frames': 3}
+        completed = ws.receive_json()
+        assert completed['type'] == 'complete'
+        assert completed['frames'] == 3
+        assert completed['report']['statistics']['frames'] == 3
+        assert completed['report']['outcome'] == 'completed'
         assert ws.receive()['type'] == 'websocket.close'
     assert all(not p.exists() for p in paths)
     assert engines[0].closed
@@ -185,3 +189,44 @@ def test_disconnect_during_initialization_closes_engine(rig, monkeypatch):
     finally:
         release.set()
         timer.cancel()
+
+
+def test_live_stop_returns_report(rig):
+    client, engines = rig
+    with client.websocket_connect('/ws/analyze') as ws:
+        ready(ws)
+        ws.send_bytes(jpeg())
+        assert ws.receive_json()['type'] == 'result'
+        ws.send_json({'type':'stop'})
+        completed = ws.receive_json()
+        assert completed['type'] == 'complete'
+        assert completed['report']['outcome'] == 'stopped'
+        assert completed['report']['statistics']['frames'] == 1
+        assert ws.receive()['type'] == 'websocket.close'
+    assert engines[0].closed
+
+
+def test_stop_before_upload_is_finished_cleans_file(rig):
+    client, engines = rig
+    with client.websocket_connect('/ws/analyze') as ws:
+        ready(ws, mode='upload', size=100)
+        ws.send_bytes(b'partial')
+        ws.send_json({'type':'stop'})
+        completed = ws.receive_json()
+        assert completed['report']['statistics']['frames'] == 0
+        assert completed['report']['outcome'] == 'stopped'
+        assert ws.receive()['type'] == 'websocket.close'
+    assert engines[0].closed
+
+
+def test_interrupted_session_retains_partial_report(rig):
+    client, _ = rig
+    with client.websocket_connect('/ws/analyze') as ws:
+        ready(ws)
+        ws.send_bytes(jpeg())
+        ws.receive_json()
+        ws.send_bytes(b'invalid')
+        error = ws.receive_json()
+        assert error['type'] == 'error'
+        assert error['report']['outcome'] == 'interrupted'
+        assert error['report']['statistics']['frames'] == 1

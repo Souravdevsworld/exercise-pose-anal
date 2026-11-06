@@ -83,3 +83,15 @@ Reliability fixes include validation before allocating models, rejecting malform
 This remains a private pilot implementation. Customer deployment requires authentication/authorization at the application or trusted gateway, shared limits across server processes, capacity/load tests on the target host, and browser/device validation. The process-local session cap is not a distributed customer quota. No claim of enterprise production readiness is made.
 
 Latest verification: **21 tests passed**; Python and JavaScript syntax checks passed; a real YOLO/MediaPipe live-mode WebSocket smoke test using a frame from the supplied video returned a detected pose, annotated image, and reference-comparison status. This tests the live transport with real inference, not physical webcam permissions or browser/device behavior.
+
+## Session summary and recommendations
+
+Uploaded videos generate a report automatically when processing finishes. For live analysis, select **End & generate report**; the current frame finishes, camera capture stops, and the server returns the session summary. Stopping an uploaded video also produces a partial report. An analysis error after at least one processed frame returns an interrupted report when the connection remains available. Closing the browser or losing the connection cannot deliver a final report.
+
+The report appears below the metrics and includes counted vs compared repetitions, tracked-frame coverage, mean elbow-motion differences, recurring top/bottom range differences, and the original analyzer's body-alignment or knee-bend cues. Each observation includes measured evidence and a specific suggestion. Empty or incompletely tracked sessions explicitly state that reference feedback is insufficient. Repeated frame messages do not double-count the last compared repetition.
+
+Choose **Download report** for a text report, **Export JSON** for structured data, or **Print / PDF** to use the browser's print-to-PDF function. Reports remain in that browser page until a new session starts or the page closes; no report history or customer data is stored on the server. Download anything you want to retain before starting another session.
+
+This uses deterministic rules over the existing engine and reference measurements, not an external AI service. Reference thresholds remain the documented 10° heuristics. A difference from one reference is not automatically incorrect technique. The report cannot evaluate hand placement, shoulder mechanics, or overall form, and does not infer injury risk, diagnose conditions, or prescribe medical rehabilitation. Frame-based alignment observations are not rep-level error percentages or durations.
+
+Validation for reports: **29 Python tests and two JavaScript UI tests pass**, plus Python/JavaScript syntax and diff checks. UI tests simulate browser controls; physical webcam and print-dialog behavior still require browser/device testing. The original pose analyzer remains unchanged.

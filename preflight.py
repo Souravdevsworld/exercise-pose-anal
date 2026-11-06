@@ -7,7 +7,7 @@ ROOT = Path(__file__).resolve().parent
 
 
 def check_sources(root=ROOT):
-    for name in ('pose_exercise_analyzer.py', 'reference_comparison.py', 'server.py'):
+    for name in ('pose_exercise_analyzer.py', 'reference_comparison.py', 'server.py', 'session_report.py'):
         path = root / name
         try:
             ast.parse(path.read_text(encoding='utf-8-sig'), filename=str(path))

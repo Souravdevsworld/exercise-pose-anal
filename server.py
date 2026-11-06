@@ -3,6 +3,8 @@ import asyncio
 import base64
 from contextlib import asynccontextmanager
 import logging
+import json
+from session_report import SessionReport
 from urllib.parse import urlsplit
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
@@ -19,6 +21,16 @@ from fastapi.staticfiles import StaticFiles
 ROOT = Path(__file__).resolve().parent
 MAX_FILE = 100 * 1024 * 1024
 MAX_FRAME = 2 * 1024 * 1024
+def is_stop(message):
+    try:
+        return json.loads(message) == {'type': 'stop'}
+    except (ValueError, TypeError):
+        return False
+
+
+class SessionEnded(Exception):
+    pass
+
 MAX_SESSIONS = 4
 slots = asyncio.Semaphore(MAX_SESSIONS)
 @asynccontextmanager
@@ -40,7 +52,7 @@ def create_engine(exercise):
     return ReferenceEngine(engine, profile) if profile is not None else engine
 
 
-def analyze(engine, frame):
+def analyze(engine, frame, report=None):
     if frame is None or frame.size == 0:
         raise ValueError('Unable to decode video frame')
     height, width = frame.shape[:2]
@@ -48,6 +60,8 @@ def analyze(engine, frame):
         frame = cv2.resize(frame, (round(width * 1280 / max(height, width)),
                                    round(height * 1280 / max(height, width))))
     annotated, result = engine.process_frame(frame)
+    if report is not None:
+        report.update(result, getattr(engine, 'comparison', None))
     ok, jpeg = cv2.imencode('.jpg', annotated, [cv2.IMWRITE_JPEG_QUALITY, 80])
     if not ok:
         raise ValueError('Unable to encode analysis frame')
@@ -74,6 +88,7 @@ async def session(ws: WebSocket):
     engine = None
     capture = None
     path = None
+    report = None
 
     async def run(fn, *args):
         # Native calls cannot be interrupted safely. Finish them before cleanup
@@ -85,6 +100,8 @@ async def session(ws: WebSocket):
         message = await asyncio.wait_for(ws.receive(), 60)
         if message['type'] == 'websocket.disconnect':
             raise WebSocketDisconnect(message.get('code', 1000))
+        if is_stop(message.get('text')):
+            raise SessionEnded()
         if message.get('bytes') is None:
             raise ValueError('Expected binary video data')
         return message['bytes']
@@ -96,6 +113,7 @@ async def session(ws: WebSocket):
         exercise, mode = config.get('exercise'), config.get('mode')
         if exercise not in ('pushup', 'situp') or mode not in ('live', 'upload'):
             raise ValueError('Choose push-ups or sit-ups and a valid input mode')
+        report = SessionReport(exercise, mode)
         size = config.get('size')
         if mode == 'upload' and (type(size) is not int or not 0 < size <= MAX_FILE):
             raise ValueError('Select a video smaller than 100 MB')
@@ -124,23 +142,28 @@ async def session(ws: WebSocket):
                 ok, frame = await run(capture.read)
                 if not ok:
                     break
-                result = await run(analyze, engine, frame)
+                result = await run(analyze, engine, frame, report)
                 count += 1
                 result['progress'] = min(1, count / total) if total > 0 else None
                 await ws.send_json(result)
                 # Browser acknowledgement bounds the output queue and notices cancellation.
-                if await asyncio.wait_for(ws.receive_text(), 60) != 'ack':
+                ack = await asyncio.wait_for(ws.receive_text(), 60)
+                if is_stop(ack):
+                    raise SessionEnded()
+                if ack != 'ack':
                     raise ValueError('Invalid acknowledgement')
             if not count:
                 raise ValueError('The video contains no readable frames')
-            await ws.send_json({'type': 'complete', 'frames': count})
+            await ws.send_json({'type': 'complete', 'frames': count, 'report': report.build()})
         else:
             while True:
                 data = await receive_binary()
                 if not 0 < len(data) <= MAX_FRAME:
                     raise ValueError('Camera frame is too large')
                 frame = await run(cv2.imdecode, np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR)
-                await ws.send_json(await run(analyze, engine, frame))
+                await ws.send_json(await run(analyze, engine, frame, report))
+    except SessionEnded:
+        await ws.send_json({'type':'complete', 'report':report.build('stopped')})
     except WebSocketDisconnect:
         pass
     except Exception as exc:
@@ -153,7 +176,8 @@ async def session(ws: WebSocket):
                 message = str(exc) if isinstance(exc, ValueError) else 'Analysis failed. Check server logs and model installation.'
             if not isinstance(exc, ValueError):
                 logging.exception('Analysis session failed')
-            await ws.send_json({'type': 'error', 'message': message})
+            await ws.send_json({'type': 'error', 'message': message,
+                                'report': report.build('interrupted') if report and report.frames else None})
         except (RuntimeError, WebSocketDisconnect, OSError):
             pass
     finally:
