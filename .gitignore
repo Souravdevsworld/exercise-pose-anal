@@ -1,2 +1,8 @@
-.venv
-yolov8n.pt
+.venv/
+__pycache__/
+.pytest_cache/
+*.pt
+.env
+
+*.py.backup-*
+*.py.repairing
