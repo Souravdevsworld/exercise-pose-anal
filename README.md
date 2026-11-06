@@ -64,3 +64,22 @@ The profile is loaded when a push-up session starts. If missing/invalid, the ses
 The supplied `videoplayback (5).mp4` was processed with the real YOLO + MediaPipe engine: **295/295 frames tracked, five full cycles extracted**, 30 fps. The median smoothed bottom/top elbow angles are approximately **47.8° / 172.3°**. These are observations from this demonstration, not prescribed target angles. The generated profile is committed and ready to load; users do not need to rebuild it.
 
 Validation for this change: 13 automated tests passed, JavaScript syntax check passed, real reference extraction succeeded, and the original analyzer's diff is empty. General accuracy on other athletes and camera setups remains unvalidated.
+
+## Repairing the reported live-camera startup error
+
+The error `pose_exercise_analyzer.py:229: SyntaxError` with an incomplete `log=` is from an edited local analyzer. The reviewed original in Git is valid and remains unchanged. Stop the server with Ctrl+C, update this branch, then run:
+
+```powershell
+.\.venv\Scripts\python.exe scripts/repair_analyzer.py
+.\.venv\Scripts\python.exe run_server.py
+```
+
+The repair reads the exact reviewed original Git blob, verifies its identity and syntax, and preserves an altered local analyzer in a timestamped backup before restoring it. It does not guess a value for `log=` or remove arbitrary lines. Re-running it on the original makes no changes. It needs the Git history from this repository (`git fetch origin` if necessary).
+
+The launcher checks Python syntax and the reference profile before starting. Direct `uvicorn server:app` startup also runs source/reference checks during application startup. Model loading still occurs per session; startup checks do not certify model availability or customer capacity.
+
+Reliability fixes include validation before allocating models, rejecting malformed camera messages and cross-origin browser connections, allowing native initialization/inference to finish before cancellation cleanup, ensuring capacity is returned even if temporary-file cleanup fails, and preventing callbacks from an old browser session from ending a new session. The automated suite now includes regression coverage for syntax failure, repair backups, malformed inputs, session isolation, and disconnect during initialization. CI runs syntax, transport/reference tests, and JavaScript syntax checks without downloading models.
+
+This remains a private pilot implementation. Customer deployment requires authentication/authorization at the application or trusted gateway, shared limits across server processes, capacity/load tests on the target host, and browser/device validation. The process-local session cap is not a distributed customer quota. No claim of enterprise production readiness is made.
+
+Latest verification: **21 tests passed**; Python and JavaScript syntax checks passed; a real YOLO/MediaPipe live-mode WebSocket smoke test using a frame from the supplied video returned a detected pose, annotated image, and reference-comparison status. This tests the live transport with real inference, not physical webcam permissions or browser/device behavior.

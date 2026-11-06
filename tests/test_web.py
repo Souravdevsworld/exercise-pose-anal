@@ -118,6 +118,70 @@ def test_upload_every_frame_and_delete(rig, tmp_path, monkeypatch):
 def test_upload_limit(rig):
     client, engines = rig
     with client.websocket_connect('/ws/analyze') as ws:
-        ready(ws, mode='upload', size=server.MAX_FILE+1)
+        ws.send_json({'exercise':'pushup', 'mode':'upload', 'size':server.MAX_FILE+1})
         assert ws.receive_json()['type'] == 'error'
+    assert not engines
+
+
+def test_invalid_json_shape(rig):
+    client, engines = rig
+    with client.websocket_connect('/ws/analyze') as ws:
+        ws.send_json([])
+        assert ws.receive_json()['message'] == 'Session configuration must be an object'
+    assert not engines
+
+
+def test_cross_origin_rejected(rig):
+    client, engines = rig
+    from starlette.websockets import WebSocketDisconnect
+    with pytest.raises(WebSocketDisconnect) as exc:
+        with client.websocket_connect('/ws/analyze', headers={'origin':'https://other.example'}):
+            pass
+    assert exc.value.code == 1008
+    assert not engines
+
+
+def test_text_camera_frame_rejected(rig):
+    client, engines = rig
+    with client.websocket_connect('/ws/analyze') as ws:
+        ready(ws)
+        ws.send_text('not binary')
+        assert ws.receive_json()['message'] == 'Expected binary video data'
     assert engines[0].closed
+
+
+def test_engine_failure_message(rig, monkeypatch):
+    client, _ = rig
+    def broken(exercise):
+        raise SyntaxError('expected argument value expression', ('pose_exercise_analyzer.py',229,1,'log='))
+    monkeypatch.setattr(server, 'create_engine', broken)
+    with client.websocket_connect('/ws/analyze') as ws:
+        ws.send_json({'exercise':'pushup', 'mode':'live'})
+        assert ws.receive_json()['type'] == 'status'
+        assert ws.receive_json()['type'] == 'status'
+        assert 'line 229' in ws.receive_json()['message']
+
+
+def test_disconnect_during_initialization_closes_engine(rig, monkeypatch):
+    import threading
+    client, engines = rig
+    original = server.create_engine
+    entered, release = threading.Event(), threading.Event()
+    def slow(exercise):
+        entered.set()
+        assert release.wait(5)
+        return original(exercise)
+    monkeypatch.setattr(server, 'create_engine', slow)
+    timer = threading.Timer(.1, release.set)
+    try:
+        with client.websocket_connect('/ws/analyze') as ws:
+            ws.send_json({'exercise':'pushup','mode':'live'})
+            ws.receive_json()
+            ws.receive_json()
+            assert entered.wait(5)
+            timer.start()
+        assert len(engines) == 1
+        assert engines[0].closed
+    finally:
+        release.set()
+        timer.cancel()

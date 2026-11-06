@@ -1,6 +1,9 @@
 """Web transport and reference comparison. One exercise engine per connection."""
 import asyncio
 import base64
+from contextlib import asynccontextmanager
+import logging
+from urllib.parse import urlsplit
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 import anyio
@@ -18,22 +21,23 @@ MAX_FILE = 100 * 1024 * 1024
 MAX_FRAME = 2 * 1024 * 1024
 MAX_SESSIONS = 4
 slots = asyncio.Semaphore(MAX_SESSIONS)
-app = FastAPI(title="Motionlab")
+@asynccontextmanager
+async def lifespan(app):
+    from preflight import check_sources
+    check_sources()
+    yield
+
+app = FastAPI(title="Motionlab", lifespan=lifespan)
 app.mount('/static', StaticFiles(directory=ROOT / 'web'), name='static')
 
 
 def create_engine(exercise):
     # Lazy import lets the web server start even before model dependencies are installed.
     from pose_exercise_analyzer import ExerciseEngine
+    from reference_comparison import ReferenceEngine, load_profile
+    profile = load_profile() if exercise == "pushup" else None
     engine = ExerciseEngine(exercise)
-    if exercise == "pushup":
-        from reference_comparison import ReferenceEngine, load_profile
-        try:
-            return ReferenceEngine(engine, load_profile())
-        except Exception:
-            engine.estimator.pose.close()
-            raise
-    return engine
+    return ReferenceEngine(engine, profile) if profile is not None else engine
 
 
 def analyze(engine, frame):
@@ -59,6 +63,10 @@ def index():
 
 @app.websocket('/ws/analyze')
 async def session(ws: WebSocket):
+    origin = ws.headers.get('origin')
+    if origin and urlsplit(origin).netloc != ws.headers.get('host'):
+        await ws.close(code=1008)
+        return
     await ws.accept()
     executor = ThreadPoolExecutor(max_workers=1)
     loop = asyncio.get_running_loop()
@@ -68,13 +76,29 @@ async def session(ws: WebSocket):
     path = None
 
     async def run(fn, *args):
-        return await loop.run_in_executor(executor, fn, *args)
+        # Native calls cannot be interrupted safely. Finish them before cleanup
+        # so a disconnected client cannot leak an engine or release capacity early.
+        with anyio.CancelScope(shield=True):
+            return await loop.run_in_executor(executor, fn, *args)
+
+    async def receive_binary():
+        message = await asyncio.wait_for(ws.receive(), 60)
+        if message['type'] == 'websocket.disconnect':
+            raise WebSocketDisconnect(message.get('code', 1000))
+        if message.get('bytes') is None:
+            raise ValueError('Expected binary video data')
+        return message['bytes']
 
     try:
         config = await asyncio.wait_for(ws.receive_json(), 30)
+        if not isinstance(config, dict):
+            raise ValueError('Session configuration must be an object')
         exercise, mode = config.get('exercise'), config.get('mode')
         if exercise not in ('pushup', 'situp') or mode not in ('live', 'upload'):
             raise ValueError('Choose push-ups or sit-ups and a valid input mode')
+        size = config.get('size')
+        if mode == 'upload' and (type(size) is not int or not 0 < size <= MAX_FILE):
+            raise ValueError('Select a video smaller than 100 MB')
         await ws.send_json({'type': 'status', 'message': 'Waiting for an analysis slot…'})
         await asyncio.wait_for(slots.acquire(), 30)
         acquired = True
@@ -82,14 +106,11 @@ async def session(ws: WebSocket):
         engine = await run(create_engine, exercise)
         await ws.send_json({'type': 'ready'})
         if mode == 'upload':
-            size = config.get('size')
-            if type(size) is not int or not 0 < size <= MAX_FILE:
-                raise ValueError('Select a video smaller than 100 MB')
             with tempfile.NamedTemporaryFile(suffix='.video', delete=False) as target:
                 path = Path(target.name)
                 received = 0
                 while received < size:
-                    chunk = await asyncio.wait_for(ws.receive_bytes(), 60)
+                    chunk = await receive_binary()
                     received += len(chunk)
                     if not chunk or len(chunk) > MAX_FRAME or received > size:
                         raise ValueError('Invalid video upload')
@@ -115,7 +136,7 @@ async def session(ws: WebSocket):
             await ws.send_json({'type': 'complete', 'frames': count})
         else:
             while True:
-                data = await asyncio.wait_for(ws.receive_bytes(), 60)
+                data = await receive_binary()
                 if not 0 < len(data) <= MAX_FRAME:
                     raise ValueError('Camera frame is too large')
                 frame = await run(cv2.imdecode, np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR)
@@ -124,12 +145,16 @@ async def session(ws: WebSocket):
         pass
     except Exception as exc:
         try:
-            message = str(exc) if isinstance(exc, ValueError) else 'Analysis failed. Check server logs and model installation.'
+            if isinstance(exc, TimeoutError):
+                message = 'Session timed out. Please start a new analysis.'
+            elif isinstance(exc, SyntaxError):
+                message = f'Analyzer syntax error at line {exc.lineno}. Restore the verified analyzer and restart the server.'
+            else:
+                message = str(exc) if isinstance(exc, ValueError) else 'Analysis failed. Check server logs and model installation.'
             if not isinstance(exc, ValueError):
-                import logging
                 logging.exception('Analysis session failed')
             await ws.send_json({'type': 'error', 'message': message})
-        except (RuntimeError, WebSocketDisconnect):
+        except (RuntimeError, WebSocketDisconnect, OSError):
             pass
     finally:
         # Resource access stays on the session worker, as does all model inference.
@@ -141,12 +166,16 @@ async def session(ws: WebSocket):
         with anyio.CancelScope(shield=True):
             try:
                 await run(cleanup)
+            except Exception:
+                logging.exception('Session resource cleanup failed')
             finally:
                 executor.shutdown(wait=False)
-                if path is not None:
-                    path.unlink(missing_ok=True)
-                if acquired:
-                    slots.release()
+                try:
+                    if path is not None:
+                        path.unlink(missing_ok=True)
+                finally:
+                    if acquired:
+                        slots.release()
             try:
                 await ws.close()
             except RuntimeError:
